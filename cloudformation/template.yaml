@@ -17,6 +17,14 @@ Parameters:
       - anthropic.claude-3-haiku-20240307-v1:0
       - amazon.titan-text-premier-v1:0
 
+  AutoPrepare:
+    Type: String
+    Default: 'false'
+    Description: Whether to automatically prepare the agent (set false for production)
+    AllowedValues:
+      - 'true'
+      - 'false'
+
 Resources:
   # IAM Role for Bedrock Agent
   AgentRole:
@@ -106,24 +114,27 @@ Resources:
                   }
               }
 
-  # Lambda Permission for Bedrock
+  # Lambda Permission for Bedrock - specific to this agent (security best practice)
   LambdaPermission:
     Type: AWS::Lambda::Permission
+    DependsOn: BedrockAgent
     Properties:
       FunctionName: !Ref ActionHandlerFunction
       Action: lambda:InvokeFunction
       Principal: bedrock.amazonaws.com
-      SourceArn: !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*'
+      SourceArn: !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/${BedrockAgent.AgentId}'
 
   # Bedrock Agent
   BedrockAgent:
     Type: AWS::Bedrock::Agent
+    UpdateReplacePolicy: Retain
+    DeletionPolicy: Retain
     Properties:
       AgentName: !Ref AgentName
       AgentResourceRoleArn: !GetAtt AgentRole.Arn
       FoundationModel: !Ref FoundationModel
       IdleSessionTTLInSeconds: 600
-      AutoPrepare: true
+      AutoPrepare: !Ref AutoPrepare
       Instruction: |
         You are a helpful AI assistant powered by Amazon Bedrock.
 

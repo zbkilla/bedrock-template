@@ -105,12 +105,13 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# Specific Lambda permission for this agent only (security best practice)
 resource "aws_lambda_permission" "bedrock_invoke" {
-  statement_id  = "AllowBedrockInvoke"
+  statement_id  = "AllowBedrockInvokeSpecific"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.action_handler.function_name
   principal     = "bedrock.amazonaws.com"
-  source_arn    = "arn:aws:bedrock:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:agent/*"
+  source_arn    = aws_bedrockagent_agent.main.agent_arn
 }
 
 # Bedrock Agent
@@ -120,7 +121,11 @@ resource "aws_bedrockagent_agent" "main" {
   foundation_model        = var.foundation_model
   instruction             = file("${path.module}/../prompts/instructions.txt")
   idle_session_ttl_in_seconds = 600
-  prepare_agent           = true
+  prepare_agent           = var.auto_prepare
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Action Group

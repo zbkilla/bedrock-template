@@ -10,6 +10,8 @@ import * as path from 'path';
 interface BedrockAgentStackProps extends cdk.StackProps {
   agentName?: string;
   foundationModel?: string;
+  autoPrepare?: boolean;
+  logRetentionDays?: logs.RetentionDays;
 }
 
 export class BedrockAgentStack extends cdk.Stack {
@@ -21,6 +23,8 @@ export class BedrockAgentStack extends cdk.Stack {
 
     const agentName = props?.agentName ?? 'bedrock-agent';
     const foundationModel = props?.foundationModel ?? 'anthropic.claude-3-sonnet-20240229-v1:0';
+    const autoPrepare = props?.autoPrepare ?? false; // Default to false for production safety
+    const logRetentionDays = props?.logRetentionDays ?? logs.RetentionDays.TWO_WEEKS;
 
     // Agent execution role
     const agentRole = new iam.Role(this, 'AgentRole', {
@@ -44,18 +48,13 @@ export class BedrockAgentStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, '../../lambda/actions')),
       timeout: cdk.Duration.seconds(30),
       memorySize: 256,
-      logRetention: logs.RetentionDays.ONE_WEEK,
+      logRetention: logRetentionDays,
       environment: {
         AGENT_NAME: agentName,
       },
     });
 
-    // Allow Bedrock to invoke the Lambda
-    actionHandler.addPermission('BedrockInvoke', {
-      principal: new iam.ServicePrincipal('bedrock.amazonaws.com'),
-      action: 'lambda:InvokeFunction',
-      sourceArn: `arn:aws:bedrock:${this.region}:${this.account}:agent/*`,
-    });
+    // Note: Lambda permission will be added after agent creation with specific ARN
 
     // Load agent instructions
     const instructions = readFileSync(
@@ -76,7 +75,7 @@ export class BedrockAgentStack extends cdk.Stack {
       instruction: instructions,
       agentResourceRoleArn: agentRole.roleArn,
       idleSessionTtlInSeconds: 600,
-      autoPrepare: true,
+      autoPrepare: autoPrepare,
       actionGroups: [
         {
           actionGroupName: 'DefaultActions',
@@ -100,6 +99,17 @@ export class BedrockAgentStack extends cdk.Stack {
 
     // Ensure alias is created after agent
     agentAlias.addDependency(agent);
+
+    // Add specific Lambda permission for this agent (security best practice)
+    actionHandler.addPermission('BedrockInvokeSpecific', {
+      principal: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      action: 'lambda:InvokeFunction',
+      sourceArn: `arn:aws:bedrock:${this.region}:${this.account}:agent/${agent.attrAgentId}`,
+    });
+
+    // Apply removal policies for production safety
+    agent.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
+    agentAlias.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
 
     // Store IDs for reference
     this.agentId = agent.attrAgentId;

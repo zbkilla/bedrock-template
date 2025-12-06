@@ -20,3 +20,9 @@ variable "foundation_model" {
     error_message = "Foundation model must be from a supported provider."
   }
 }
+
+variable "auto_prepare" {
+  description = "Whether to automatically prepare the agent after creation (set false for production)"
+  type        = bool
+  default     = false
+}
