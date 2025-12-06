@@ -26,10 +26,16 @@ export class BedrockAgentStack extends cdk.Stack {
     const autoPrepare = props?.autoPrepare ?? false; // Default to false for production safety
     const logRetentionDays = props?.logRetentionDays ?? logs.RetentionDays.TWO_WEEKS;
 
-    // Agent execution role
+    // Agent execution role with SourceAccount condition (security best practice)
     const agentRole = new iam.Role(this, 'AgentRole', {
       roleName: `${agentName}-role`,
-      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com'),
+      assumedBy: new iam.ServicePrincipal('bedrock.amazonaws.com', {
+        conditions: {
+          StringEquals: {
+            'aws:SourceAccount': this.account,
+          },
+        },
+      }),
       description: 'Role for Bedrock Agent execution',
     });
 
