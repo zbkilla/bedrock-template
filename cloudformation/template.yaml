@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Amazon Bedrock Agent Infrastructure'
+
+Parameters:
+  AgentName:
+    Type: String
+    Default: my-bedrock-agent
+    Description: Name for the Bedrock agent
+
+  FoundationModel:
+    Type: String
+    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Description: Foundation model ID
+    AllowedValues:
+      - anthropic.claude-3-5-sonnet-20241022-v2:0
+      - anthropic.claude-3-sonnet-20240229-v1:0
+      - anthropic.claude-3-haiku-20240307-v1:0
+      - amazon.titan-text-premier-v1:0
+
+Resources:
+  # IAM Role for Bedrock Agent
+  AgentRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AgentName}-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: bedrock.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: BedrockModelAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource: !Sub 'arn:aws:bedrock:${AWS::Region}::foundation-model/${FoundationModel}'
+
+  # Lambda Execution Role
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${AgentName}-lambda-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+
+  # Action Handler Lambda
+  ActionHandlerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${AgentName}-action-handler'
+      Runtime: python3.12
+      Handler: index.lambda_handler
+      Role: !GetAtt LambdaRole.Arn
+      Timeout: 30
+      MemorySize: 256
+      Environment:
+        Variables:
+          AGENT_NAME: !Ref AgentName
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          from datetime import datetime
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def lambda_handler(event, context):
+              logger.info(f"Event: {json.dumps(event)}")
+
+              api_path = event.get('apiPath', '')
+              parameters = event.get('parameters', [])
+
+              if api_path == '/getStatus':
+                  resource_id = next((p['value'] for p in parameters if p['name'] == 'resourceId'), 'unknown')
+                  result = {"resourceId": resource_id, "status": "active", "lastUpdated": datetime.utcnow().isoformat()}
+              elif api_path == '/search':
+                  query = next((p['value'] for p in parameters if p['name'] == 'query'), '')
+                  result = {"results": [{"id": "1", "name": f"Result for {query}"}], "total": 1}
+              else:
+                  result = {"message": "Action executed successfully"}
+
+              return {
+                  'messageVersion': '1.0',
+                  'response': {
+                      'actionGroup': event.get('actionGroup', ''),
+                      'apiPath': api_path,
+                      'httpMethod': event.get('httpMethod', 'GET'),
+                      'httpStatusCode': 200,
+                      'responseBody': {'application/json': {'body': json.dumps(result)}}
+                  }
+              }
+
+  # Lambda Permission for Bedrock
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ActionHandlerFunction
+      Action: lambda:InvokeFunction
+      Principal: bedrock.amazonaws.com
+      SourceArn: !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:agent/*'
+
+  # Bedrock Agent
+  BedrockAgent:
+    Type: AWS::Bedrock::Agent
+    Properties:
+      AgentName: !Ref AgentName
+      AgentResourceRoleArn: !GetAtt AgentRole.Arn
+      FoundationModel: !Ref FoundationModel
+      IdleSessionTTLInSeconds: 600
+      AutoPrepare: true
+      Instruction: |
+        You are a helpful AI assistant powered by Amazon Bedrock.
+
+        Your role is to assist users with their requests by:
+        1. Understanding their needs clearly
+        2. Using available tools when appropriate
+        3. Providing accurate and helpful responses
+
+        Be polite, professional, and concise.
+      ActionGroups:
+        - ActionGroupName: DefaultActions
+          ActionGroupExecutor:
+            Lambda: !GetAtt ActionHandlerFunction.Arn
+          ApiSchema:
+            Payload: |
+              openapi: "3.0.0"
+              info:
+                title: "Agent Actions API"
+                version: "1.0.0"
+              paths:
+                /getStatus:
+                  get:
+                    operationId: getStatus
+                    summary: "Get resource status"
+                    parameters:
+                      - name: resourceId
+                        in: query
+                        required: true
+                        schema:
+                          type: string
+                    responses:
+                      "200":
+                        description: "Success"
+                /search:
+                  get:
+                    operationId: searchResources
+                    summary: "Search resources"
+                    parameters:
+                      - name: query
+                        in: query
+                        required: true
+                        schema:
+                          type: string
+                    responses:
+                      "200":
+                        description: "Success"
+
+  # Agent Alias
+  AgentAlias:
+    Type: AWS::Bedrock::AgentAlias
+    DependsOn: BedrockAgent
+    Properties:
+      AgentId: !GetAtt BedrockAgent.AgentId
+      AgentAliasName: prod
+      Description: Production alias
+
+Outputs:
+  AgentId:
+    Description: Bedrock Agent ID
+    Value: !GetAtt BedrockAgent.AgentId
+    Export:
+      Name: !Sub '${AgentName}-agent-id'
+
+  AgentAliasId:
+    Description: Agent Alias ID
+    Value: !GetAtt AgentAlias.AgentAliasId
+    Export:
+      Name: !Sub '${AgentName}-alias-id'
+
+  LambdaArn:
+    Description: Action Handler Lambda ARN
+    Value: !GetAtt ActionHandlerFunction.Arn

@@ -1,0 +1,113 @@
+openapi: "3.0.0"
+info:
+  title: "Bedrock Agent Actions API"
+  version: "1.0.0"
+  description: "API schema for Bedrock Agent action groups"
+
+paths:
+  /getStatus:
+    get:
+      operationId: getStatus
+      summary: "Get the current status of a resource"
+      description: "Retrieves status information for a specified resource ID"
+      parameters:
+        - name: resourceId
+          in: query
+          required: true
+          description: "The unique identifier of the resource"
+          schema:
+            type: string
+      responses:
+        "200":
+          description: "Status retrieved successfully"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  resourceId:
+                    type: string
+                  status:
+                    type: string
+                  lastUpdated:
+                    type: string
+                    format: date-time
+
+  /executeAction:
+    post:
+      operationId: executeAction
+      summary: "Execute an action on a resource"
+      description: "Performs a specified action on the given resource"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - resourceId
+                - action
+              properties:
+                resourceId:
+                  type: string
+                  description: "The resource to act upon"
+                action:
+                  type: string
+                  description: "The action to execute"
+                  enum:
+                    - start
+                    - stop
+                    - restart
+                    - update
+                parameters:
+                  type: object
+                  description: "Optional action parameters"
+      responses:
+        "200":
+          description: "Action executed successfully"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  result:
+                    type: object
+
+  /search:
+    get:
+      operationId: searchResources
+      summary: "Search for resources"
+      description: "Search resources based on query parameters"
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: "Search query string"
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: "Maximum number of results"
+          schema:
+            type: integer
+            default: 10
+            maximum: 100
+      responses:
+        "200":
+          description: "Search results"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  results:
+                    type: array
+                    items:
+                      type: object
+                  total:
+                    type: integer

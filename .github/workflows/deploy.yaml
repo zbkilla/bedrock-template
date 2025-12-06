@@ -1,0 +1,127 @@
+name: Deploy Bedrock Agent
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  AWS_REGION: us-east-1
+  AGENT_NAME: my-bedrock-agent
+
+jobs:
+  validate:
+    name: Validate Templates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install CDK dependencies
+        working-directory: ./cdk
+        run: npm ci
+
+      - name: CDK Synth (validate)
+        working-directory: ./cdk
+        run: npx cdk synth --no-staging
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: '1.6'
+
+      - name: Terraform Validate
+        working-directory: ./terraform
+        run: |
+          terraform init -backend=false
+          terraform validate
+
+      - name: CloudFormation Lint
+        uses: scottbrenner/cfn-lint-action@v2
+        with:
+          args: cloudformation/template.yaml
+
+  deploy-cdk:
+    name: Deploy with CDK
+    needs: validate
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+    environment: ${{ github.event.inputs.environment }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: ./cdk
+        run: npm ci
+
+      - name: Deploy CDK Stack
+        working-directory: ./cdk
+        run: |
+          npx cdk deploy --require-approval never \
+            -c agentName=${{ env.AGENT_NAME }}-${{ github.event.inputs.environment }}
+
+  test-agent:
+    name: Test Agent
+    needs: deploy-cdk
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Test Agent Invocation
+        run: |
+          AGENT_ID=$(aws cloudformation describe-stacks \
+            --stack-name BedrockAgentStack \
+            --query "Stacks[0].Outputs[?ExportName=='${{ env.AGENT_NAME }}-${{ github.event.inputs.environment }}-agent-id'].OutputValue" \
+            --output text)
+
+          ALIAS_ID=$(aws cloudformation describe-stacks \
+            --stack-name BedrockAgentStack \
+            --query "Stacks[0].Outputs[?ExportName=='${{ env.AGENT_NAME }}-${{ github.event.inputs.environment }}-alias-id'].OutputValue" \
+            --output text)
+
+          echo "Testing agent ${AGENT_ID} with alias ${ALIAS_ID}"
+
+          aws bedrock-agent-runtime invoke-agent \
+            --agent-id ${AGENT_ID} \
+            --agent-alias-id ${ALIAS_ID} \
+            --session-id "test-$(date +%s)" \
+            --input-text "Hello, can you help me?" \
+            --output text
